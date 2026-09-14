@@ -109,7 +109,7 @@ class DockerPolicy(unittest.TestCase):
             "--network=none",
             "--read-only",
             "--cap-drop=ALL",
-            "--memory=256m",
+            "--memory=192m",
             "--pids-limit=32",
             "--user=65532:65532",
             "--security-opt=no-new-privileges:true",
