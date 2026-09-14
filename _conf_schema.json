@@ -1,0 +1,1 @@
+{"enabled":{"description":"启用代码执行工具（关闭后请重载插件，正在运行的任务会停止）","type":"bool","default":true}}

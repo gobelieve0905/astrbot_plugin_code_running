@@ -1,0 +1,27 @@
+[Unit]
+Description=AstrBot isolated Python task runner
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/server-operations/astrbot/code-running/current/runner.env
+ExecStartPre=/usr/bin/python3 -B /opt/server-operations/astrbot/code-running/current/runner/cleanup.py
+ExecStart=/usr/bin/python3 -B /opt/server-operations/astrbot/code-running/current/runner/service.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+MemoryMax=96M
+CPUQuota=25%
+TasksMax=32
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/apps/astrbot/state/data/plugin_data/astrbot_plugin_code_running
+InaccessiblePaths=/srv/apps/astrbot/credentials /srv/apps/astrbot/state/data/config /srv/apps/astrbot/state/data/cmd_config.json
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
