@@ -16,7 +16,7 @@ from astrbot.core.agent.tool import FunctionTool
 from mcp.types import CallToolResult, TextContent
 
 from .guide import ROUTING, SECTIONS, read_guide
-from .jobs import Jobs, filename
+from .jobs import JobError, Jobs, filename
 
 PARAMETERS = {
     "code_start": {
@@ -28,7 +28,7 @@ PARAMETERS = {
             },
             "api_scopes": {
                 "type": "object",
-                "description": "工具名→固定参数约束，例如 {Meta_get_insights: {node_id: act_123}}；只选本任务需要的已启用 API 工具。空对象表示纯计算。",
+                "description": "真实工具名→顶层参数等值约束。只固定确实需要固定的参数；{真实工具名:{}} 允许该操作的合法参数变化，后台权限照常校验。不编造名称别名。api_scopes={} 表示纯计算。",
                 "additionalProperties": {"type": "object"},
             },
             "attachment_indexes": {
@@ -82,6 +82,28 @@ PARAMETERS["code_guide"] = {
     "properties": {"section": {"type": "string", "enum": list(SECTIONS), "default": "overview"}},
     "additionalProperties": False,
 }
+PARAMETERS["code_api"] = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "maxLength": 200},
+        "offset": {"type": "integer", "minimum": 0},
+        "tool": {"type": "string"},
+        "arguments": {"type": "object"},
+        "constraints": {"type": "object"},
+    },
+    "additionalProperties": False,
+}
+PARAMETERS["code_read"] = {
+    "type": "object",
+    "properties": {
+        "job_id": {"type": "string"},
+        "name": {"type": "string"},
+        "offset": {"type": "integer", "minimum": 0, "default": 0},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 8000, "default": 4000},
+    },
+    "required": ["job_id", "name"],
+    "additionalProperties": False,
+}
 PARAMETERS["code_status"]["properties"]["wait_seconds"] = {
     "type": "integer",
     "minimum": 0,
@@ -91,8 +113,10 @@ PARAMETERS["code_status"]["properties"]["wait_seconds"] = {
 }
 
 DESCRIPTIONS = {
-    "code_guide": "读取随插件发布的通用批量任务 Skill。复杂批量任务先读 overview，编码前读 batch，断点续接读 resume，汇总交付前读 analysis。固定只读章节，不执行代码、不读取任意文件、不调用 API。",
-    "code_start": "多账户、多页或跨来源批量任务先用 code_guide 读取执行规范。启动隔离 Python 长任务，立即返回任务 ID。无外网/宿主文件访问；API 只能通过 controlled_api.call 使用 api_scopes 内操作，每次分页/重试重新检查后台权限。不要自动重试写操作。可独立处理文件与计算，失败后修正代码创建新任务；用 code_status 获取进度，完成后用 code_file 发送结果文件。",
+    "code_read": "分段读取当前会话用户任务的 UTF-8 文本成果或 submitted_code.py，供查看、修改程序和复用结果；只接受 code_status 文件名，不发送消息、不读取任意宿主文件。offset/limit 按字符计。",
+    "code_api": "只读 API 工具发现与预检：query/offset 搜索当前启用工具；tool 精确读取定义；tool+arguments+constraints 检查 JSON Schema 和固定参数约束。不发业务请求、不授予调用权限。正式请求仍校验平台规则和实时权限。",
+    "code_guide": "读取执行环境手册：overview 能力与限制，api 工具契约，execution 程序执行，artifacts 文件和恢复。按需要阅读；不规定业务流程。",
+    "code_start": "需要了解执行环境时用 code_guide；不确定 API 契约时先用 code_api。启动隔离 Python 长任务，立即返回任务 ID。无外网/宿主文件访问；API 只能通过 controlled_api.call 使用 api_scopes 内操作，每次分页/重试重新检查后台权限。不要自动重试写操作。可独立处理文件与计算，失败后修正代码创建新任务；用 code_status 获取进度，完成后用 code_file 发送结果文件。",
     "code_status": "查询当前会话用户的 Python 任务状态、输出、错误及结果文件；仍在运行时稍后再查询。",
     "code_stop": "停止当前会话用户的 Python 任务并撤销任务通道，远端已发出的写请求可能已经执行。",
     "code_file": "把当前会话用户任务生成的指定文件发送到当前会话。只接受 code_status 列出的文件名。",
@@ -172,6 +196,21 @@ class CodeTool(FunctionTool):
                 if pending and kwargs.get("wait_seconds", 10):
                     await asyncio.wait([pending], timeout=kwargs.get("wait_seconds", 10))
                 result = jobs.view(record)
+            elif self.name == "code_read":
+                path = jobs.artifact(kwargs["job_id"], kwargs["name"], owner)
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except UnicodeError:
+                    raise ValueError("文件不是 UTF-8 文本，请在隔离程序中处理") from None
+                offset, limit = kwargs.get("offset", 0), kwargs.get("limit", 4000)
+                result = {
+                    "name": kwargs["name"],
+                    "text": content[offset : offset + limit],
+                    "next_offset": offset + limit if offset + limit < len(content) else None,
+                    "total_chars": len(content),
+                }
+            elif self.name == "code_api":
+                result = await jobs.inspect_api(kwargs)
             elif self.name == "code_guide":
                 result = read_guide(kwargs.get("section", "overview"))
                 result["limits"] = {"code_max_calls": jobs.max_calls, "max_seconds": 600}
@@ -185,7 +224,10 @@ class CodeTool(FunctionTool):
         except Exception as exc:
             result = {
                 "ok": False,
-                "error": str(exc)[:300] if type(exc) is ValueError else "参数无效或执行服务不可用",
+                "error_code": getattr(exc, "code", "INVALID_REQUEST"),
+                "error": str(exc)[:300]
+                if isinstance(exc, (ValueError, JobError))
+                else "参数无效或执行服务不可用",
             }
         return CallToolResult(
             content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False))],

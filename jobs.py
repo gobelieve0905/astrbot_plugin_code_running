@@ -128,12 +128,29 @@ class Jobs:
             else 0
         )
         result["data_completeness"] = (
-            "未自动认证业务范围完整；请依据完整审计与检查点核对账户、分页和失败项"
+            "未自动认证业务范围完整；请依据完整审计与检查点核对用户要求、执行结果和失败项"
         )
         result["resume_hint"] = (
             "新任务通过 previous_files 读取已保存结果/检查点，重新声明 api_scopes；不自动重放写请求。"
         )
         return result
+
+    async def inspect_api(self, payload):
+        writer = None
+        try:
+            async with asyncio.timeout(10):
+                reader, writer = await asyncio.open_unix_connection(
+                    self.gateway_socket, limit=MAX_FRAME
+                )
+                return await rpc(reader, writer, {"action": "inspect", **payload})
+        except (OSError, TimeoutError):
+            raise ValueError(
+                "API 工具通道不可用；请确认已安装并启用 API 插件，纯计算不需要此通道"
+            ) from None
+        finally:
+            if writer:
+                writer.close()
+                await writer.wait_closed()
 
     def start(self, owner, code, scopes, inputs, timeout=120, quota=50):
         self.prune()
@@ -170,6 +187,7 @@ class Jobs:
         }
         self.records[record["id"]] = record
         self.persist(record)
+        self.save_file(record, "submitted_code.py", code.encode(), internal=True)
         task = asyncio.create_task(self.run(record, code, scopes, inputs, timeout, quota))
         self.tasks[record["id"]] = task
         task.add_done_callback(lambda _: self.tasks.pop(record["id"], None))
@@ -346,12 +364,12 @@ class Jobs:
 
     def save_file(self, record, name, data, *, replace=False, internal=False):
         filename(name)
-        if not internal and name in {"api-results.jsonl", "api-audit.json"}:
+        if not internal and name in {"api-results.jsonl", "api-audit.json", "submitted_code.py"}:
             raise ValueError("文件名由系统保留")
         old = next((f for f in record["files"] if f["name"] == name), None)
         if old and not replace:
             raise ValueError("文件已存在；检查点请使用 checkpoint 更新")
-        if (not old and len(record["files"]) >= (22 if internal else 20)) or sum(
+        if (not old and len(record["files"]) >= (23 if internal else 20)) or sum(
             f["bytes"] for f in record["files"] if f["name"] != name
         ) + len(data) > (10 if internal else 8) * 1024 * 1024:
             raise ValueError("结果文件超过存储限额")

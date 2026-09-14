@@ -57,6 +57,12 @@ class JobTests(unittest.IsolatedAsyncioTestCase):
         final = self.manager.get(record["id"], "alice")
         self.assertEqual(final["state"], "succeeded")
         self.assertEqual(final["output"], "42")
+        program = self.manager.artifact(record["id"], "submitted_code.py", "alice")
+        self.assertEqual(program.read_text(), "print(42)")
+        with self.assertRaises(ValueError):
+            self.manager.artifact(record["id"], "submitted_code.py", "bob")
+        with self.assertRaises(ValueError):
+            self.manager.save_file(record, "submitted_code.py", b"override", replace=True)
         path = self.manager.artifact(record["id"], "result.csv", "alice")
         self.assertEqual(path.read_bytes(), b"x\n42\n")
         with self.assertRaises(ValueError):
@@ -66,6 +72,30 @@ class JobTests(unittest.IsolatedAsyncioTestCase):
         path.write_text("bad")
         with self.assertRaises(ValueError):
             self.manager.artifact(record["id"], "result.csv", "alice")
+
+    async def test_metadata_bridge_is_read_only_and_api_optional(self):
+        with self.assertRaises(ValueError):
+            await self.manager.inspect_api({"query": "test"})
+        received = []
+
+        async def metadata(reader, writer):
+            received.append(json.loads(await reader.readline()))
+            writer.write(b'{"ok":true,"items":[],"total":0}\n')
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        path = str(self.root / "metadata.sock")
+        server = await asyncio.start_unix_server(metadata, path)
+        self.manager.gateway_socket = path
+        try:
+            result = await self.manager.inspect_api({"query": "test"})
+            self.assertEqual(result["total"], 0)
+            self.assertEqual(received, [{"action": "inspect", "query": "test"}])
+            self.assertFalse(self.manager.records)
+        finally:
+            server.close()
+            await server.wait_closed()
 
     async def test_stop_and_global_slot(self):
         record = self.manager.start("alice", "wait", {}, {})

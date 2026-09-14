@@ -3,7 +3,7 @@ function initialize() {
 const states = {running:'运行中', succeeded:'已完成',failed:'失败',stopped:'已停止',interrupted:'重载中断'};
 const el = (tag, text) => {const node=document.createElement(tag);node.textContent=text;return node;};
 let guideLoaded=false;
-const guideTitles={overview:'执行总览',batch:'批量读取',resume:'断点续接',analysis:'聚合与交付'};
+const guideTitles={overview:'环境总览',api:'API 契约',execution:'程序执行',artifacts:'文件与恢复'};
 async function loadGuide() {
  try {
   await bridge.ready();

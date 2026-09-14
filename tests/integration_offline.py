@@ -30,7 +30,7 @@ async def main():
         context.get_llm_tool_manager().func_list.append(foreign)
         plugin = module.CodeRunningPlugin(context, {"enabled": True})
         await plugin.initialize()
-        assert len(plugin.tools) == 5
+        assert len(plugin.tools) == 7
         assert all(t.handler_module_path == package.__name__ + ".main" for t in plugin.tools)
         event = types.SimpleNamespace(
             unified_msg_origin="test:group:1",
@@ -103,7 +103,15 @@ async def main():
         assert (
             status["ok"] and status["state"] == "failed"
         )  # Runner absent: no host execution fallback.
+        read_tool = next(t for t in plugin.tools if t.name == "code_read")
+        source = json.loads(
+            (await read_tool.call(wrapped, job_id=job_id, name="submitted_code.py", limit=5))
+            .content[0]
+            .text
+        )
+        assert source["ok"] and source["text"] == "print" and source["next_offset"] == 5
         event.get_sender_id = lambda: "bob"
+        assert (await read_tool.call(wrapped, job_id=job_id, name="submitted_code.py")).isError
         assert (await plugin.tools[1].call(wrapped, job_id=job_id)).isError
         assert (
             await plugin.tools[0].call(wrapped, code="print(42)", input_texts={"../secret": "x"})
