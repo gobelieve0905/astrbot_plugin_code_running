@@ -8,11 +8,12 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 
 class Element {
   constructor(tag) { this.tag = tag; this.textContent = ''; this.children = []; }
+  setAttribute(name,value) { this[name]=value; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
 }
 function page(readyState = 'loading') {
-  const nodes = Object.fromEntries(['jobs', 'notice', 'refresh'].map(id => [id, new Element(id)]));
+  const nodes = Object.fromEntries(['jobs', 'notice', 'refresh', 'guide-panel', 'guide-tabs', 'guide-content', 'guide-notice', 'guide-retry'].map(id => [id, new Element(id)]));
   const events = {};
   const window = {};
   const document = {
@@ -86,4 +87,27 @@ test('missing SDK reports initialization failure instead of unhandled rejection'
   p.events.DOMContentLoaded();
   await settle();
   assert.match(p.nodes.notice.textContent, /页面初始化失败/);
+});
+
+
+test('guide loads on demand, switches sections safely and retries independently', async () => {
+  const p=page('complete');const bridge=sdk();
+  const original=bridge.apiGet;let fail=true;
+  bridge.apiGet=async endpoint=>{
+    if(endpoint!=='guide')return original(endpoint);
+    if(fail)throw new Error('unavailable');
+    return {sections:[{section:'overview',content:'<script>plain text</script>'},{section:'batch',content:'batch example'}]};
+  };
+  p.window.AstrBotPluginPage=bridge;p.run();await settle();
+  assert.deepEqual(bridge.calls,[['get','jobs']]);
+  p.nodes['guide-panel'].open=true;p.nodes['guide-panel'].ontoggle();await settle();
+  assert.match(p.nodes['guide-notice'].textContent,/加载失败/);
+  fail=false;await p.nodes['guide-retry'].onclick();
+  assert.equal(p.nodes['guide-content'].textContent,'<script>plain text</script>');
+  const tabs=p.nodes['guide-tabs'].children;
+  assert.equal(tabs[0]['aria-pressed'],'true');tabs[1].onclick();
+  assert.equal(p.nodes['guide-content'].textContent,'batch example');
+  assert.equal(tabs[0]['aria-pressed'],'false');
+  assert.equal(tabs[1]['aria-pressed'],'true');
+  assert.equal(p.nodes['guide-notice'].textContent,'');
 });

@@ -26,3 +26,8 @@ def read_guide(section):
         "content": raw.decode("utf-8"),
         "sha256": hashlib.sha256(raw).hexdigest(),
     }
+
+
+ROUTING = """[代码执行插件：通用批量任务指南]
+遇到多账户、多页、跨数据源取数或复杂文件聚合，先调用 code_guide(section="overview")；编写批量代码前读 batch，断点续接读 resume，聚合交付前读 analysis。核对工具、预算、分页、检查点和覆盖率，在已授权任务范围内继续未完成的只读分段，避免从头重复查询。简单单次查询不必使用批量流程。
+code_guide 是固定只读指南，code_start 是独立隔离执行服务，不需要开启原生 Computer Use 或宿主终端。权限与固定代理由 API 插件校验，不得绕过，不自动重放写操作。代码执行成功不等于范围查全；交付部分结果必须明确标注。"""

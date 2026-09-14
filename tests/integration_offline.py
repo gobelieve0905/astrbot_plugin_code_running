@@ -43,10 +43,10 @@ async def main():
             result = json.loads((await guide.call(wrapped, section=section)).content[0].text)
             assert result["ok"] and result["content"] and len(result["sha256"]) == 64
         assert not plugin.jobs.records
-        # Real request builder includes persona routing and the registered guide tool.
+        # Any ordinary persona gets guidance only for tools already allowed in its request.
         from astrbot.core.astr_main_agent import _ensure_persona_and_skills
 
-        routing = '批量任务先调用 code_guide(section="overview")，按预算保存检查点并续接。'
+        routing = "普通用户的人格内容，不含任何批量任务指引。"
 
         async def resolve(**kwargs):
             return "test", {"prompt": routing, "tools": None, "skills": []}, None, False
@@ -64,6 +64,30 @@ async def main():
         await _ensure_persona_and_skills(req, {"computer_use_runtime": "none"}, context, event)
         assert routing in req.system_prompt
         assert any(t.name == "code_guide" for t in req.func_tool)
+        original_tools = list(req.func_tool)
+        await plugin.provide_batch_guidance(event, req)
+        assert module.ROUTING in req.system_prompt and routing in req.system_prompt
+        await plugin.provide_batch_guidance(event, req)
+        assert req.system_prompt.count(module.ROUTING) == 1
+        assert list(req.func_tool) == original_tools
+        from astrbot.core.agent.tool import ToolSet
+
+        for allowed in ([], [guide], [plugin.tools[0]], [foreign]):
+            restricted = ToolSet()
+            for tool in allowed:
+                restricted.add_tool(tool)
+            request = types.SimpleNamespace(system_prompt="unchanged", func_tool=restricted)
+            await plugin.provide_batch_guidance(event, request)
+            assert request.system_prompt == "unchanged"
+            assert list(request.func_tool) == allowed
+        for disabled_by in ("tool", "config", "closed"):
+            guide.active = disabled_by != "tool"
+            plugin.config["enabled"] = disabled_by != "config"
+            plugin.closed = disabled_by == "closed"
+            req.system_prompt = "unchanged"
+            await plugin.provide_batch_guidance(event, req)
+            assert req.system_prompt == "unchanged"
+        guide.active, plugin.closed, plugin.config["enabled"] = True, False, True
         assert (await guide.call(wrapped, section="../../cmd_config.json")).isError
         plugin.config["enabled"] = False
         assert (await guide.call(wrapped)).isError

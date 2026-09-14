@@ -2,6 +2,32 @@ function initialize() {
  const bridge = window.AstrBotPluginPage;
 const states = {running:'运行中', succeeded:'已完成',failed:'失败',stopped:'已停止',interrupted:'重载中断'};
 const el = (tag, text) => {const node=document.createElement(tag);node.textContent=text;return node;};
+let guideLoaded=false;
+const guideTitles={overview:'执行总览',batch:'批量读取',resume:'断点续接',analysis:'聚合与交付'};
+async function loadGuide() {
+ try {
+  await bridge.ready();
+  const result=await bridge.apiGet('guide');
+  const tabs=document.getElementById('guide-tabs');tabs.replaceChildren();
+  const buttons=[];
+  function show(section,button){
+   document.getElementById('guide-content').textContent=section.content;
+   for(const b of buttons)b.setAttribute('aria-pressed',String(b===button));
+  }
+  for(const section of result.sections){
+   const button=el('button',guideTitles[section.section] || section.section);
+   button.type='button';button.onclick=()=>show(section,button);
+   buttons.push(button);tabs.append(button);
+  }
+  if(!buttons.length)throw new Error('empty guide');
+  show(result.sections[0],buttons[0]);
+  guideLoaded=true;document.getElementById('guide-notice').textContent='';
+ }catch(error){document.getElementById('guide-notice').textContent='指南加载失败，请重新加载';}
+}
+document.getElementById('guide-panel').ontoggle=()=>{
+ if(document.getElementById('guide-panel').open && !guideLoaded)loadGuide();
+};
+document.getElementById('guide-retry').onclick=loadGuide;
 async function refresh() {
  try {
   const result=await bridge.apiGet('jobs');

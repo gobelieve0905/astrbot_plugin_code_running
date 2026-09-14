@@ -7,13 +7,15 @@ import json
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import File
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, json_response, request
 from astrbot.core.agent.tool import FunctionTool
 from mcp.types import CallToolResult, TextContent
 
-from .guide import SECTIONS, read_guide
+from .guide import ROUTING, SECTIONS, read_guide
 from .jobs import Jobs, filename
 
 PARAMETERS = {
@@ -202,7 +204,10 @@ class CodeRunningPlugin(Star):
             str(root.parent / "astrbot_plugin_api_import" / "task-gateway.sock"),
             max_calls=config.get("max_calls", 200),
         )
-        self.web_handlers = [self.page_jobs, self.page_stop]
+        self.web_handlers = [self.page_jobs, self.page_stop, self.page_guide]
+        context.register_web_api(
+            "/astrbot_plugin_code_running/guide", self.page_guide, ["GET"], "批量任务指南"
+        )
         context.register_web_api(
             "/astrbot_plugin_code_running/jobs", self.page_jobs, ["GET"], "代码执行管理"
         )
@@ -216,6 +221,24 @@ class CodeRunningPlugin(Star):
             raise ValueError("代码执行工具名称冲突")
         self.tools = [CodeTool(self, name) for name in PARAMETERS]
         self.context.add_llm_tools(*self.tools)
+
+    @filter.on_llm_request()
+    async def provide_batch_guidance(self, event: AstrMessageEvent, req: ProviderRequest):
+        if self.closed or not self.config.get("enabled", True) or not req.func_tool:
+            return
+        # Inspect the already filtered request; never add tools or widen persona access.
+        available = {id(tool) for tool in req.func_tool if tool.active}
+        required = [t for t in self.tools if t.name in {"code_start", "code_guide"}]
+        if len(required) != 2 or not all(t.active and id(t) in available for t in required):
+            return
+        prompt = req.system_prompt or ""
+        if ROUTING not in prompt:
+            req.system_prompt = prompt + "\n\n" + ROUTING
+
+    async def page_guide(self):
+        if self.closed:
+            return error_response("插件已卸载，请刷新页面", status_code=503)
+        return json_response({"sections": [read_guide(section) for section in SECTIONS]})
 
     async def page_jobs(self):
         self.jobs.prune()
