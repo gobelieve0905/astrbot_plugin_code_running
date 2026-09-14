@@ -48,10 +48,12 @@ async def main():
         runner = Runner(sys.argv[1])
         server = await asyncio.start_unix_server(runner.handle, path, limit=12 * 1024 * 1024)
 
-        async def start(code, seconds=60):
+        async def start(code, seconds=60, quota=200):
             reader, writer = await asyncio.open_unix_connection(path, limit=12 * 1024 * 1024)
             writer.write(
-                json.dumps({"code": code, "inputs": {}, "tools": [], "timeout": seconds}).encode()
+                json.dumps(
+                    {"code": code, "inputs": {}, "tools": [], "timeout": seconds, "quota": quota}
+                ).encode()
                 + b"\n"
             )
             await writer.drain()
@@ -75,12 +77,55 @@ async def main():
                         await writer.drain()
                     if event["type"] in ("done", "error"):
                         break
-            assert events[-1] == {"type": "done", "ok": True}, events[-1]
+            assert events[-1]["type"] == "done" and events[-1]["ok"], events[-1]
             assert {e["name"] for e in events if e["type"] == "file"} == {
                 "result.csv",
                 "result.xlsx",
                 "chart.png",
             }
+            writer.close()
+            await writer.wait_closed()
+            await idle()
+            # Host quota refusal remains recoverable: checkpoint acknowledgement then clean exit.
+            reader, writer = await start(
+                """
+from controlled_api import call, APIError, checkpoint, budget
+assert budget()['remaining'] == 1
+call('synthetic_read')
+try:
+    call('synthetic_read')
+except APIError as exc:
+    assert exc.code == 'QUOTA_EXHAUSTED'
+    assert budget()['remaining'] == 0
+    checkpoint('progress.json', {'next': 2})
+else:
+    raise AssertionError('quota bypass')
+""",
+                quota=1,
+            )
+            calls = 0
+            saved = False
+            async with timeout(30):
+                while line := await reader.readline():
+                    event = json.loads(line)
+                    if event["type"] == "api":
+                        calls += 1
+                        writer.write(b'{"ok":true,"remaining":0}\n')
+                        await writer.drain()
+                    elif event["type"] == "checkpoint":
+                        import base64
+
+                        assert json.loads(base64.b64decode(event["data"])) == {"next": 2}
+                        saved = True
+                        writer.write(b'{"ok":true}\n')
+                        await writer.drain()
+                    elif event["type"] == "done":
+                        assert event["ok"] and saved and calls == 1
+                        break
+                    elif event["type"] == "error":
+                        raise AssertionError(event)
+                else:
+                    raise AssertionError("missing completion")
             writer.close()
             await writer.wait_closed()
             await idle()
@@ -100,7 +145,9 @@ async def main():
             reader, writer = await start("while True: pass", 1)
             async with timeout(20):
                 result = json.loads(await reader.readline())
-                assert result["type"] == "error", result
+                assert result["type"] == "error" and result["error_code"] == "EXECUTION_TIMEOUT", (
+                    result
+                )
             writer.close()
             await writer.wait_closed()
             await idle()

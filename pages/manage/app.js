@@ -8,11 +8,13 @@ async function refresh() {
   const list=document.getElementById('jobs');list.replaceChildren();
   for (const job of result.jobs.sort((a,b)=>b.created-a.created)) {
    const card=el('article','');
-   card.append(el('h2',states[job.state] || job.state),el('small',`${new Date(job.created*1000).toLocaleString()} · ${job.id}`),el('p',`API 调用 ${job.calls} 次 · 时间上限 ${job.timeout} 秒`));
+   card.append(el('h2',states[job.state] || job.state),el('small',`${new Date(job.created*1000).toLocaleString()} · ${job.id}`),el('p',`API 调用 ${job.calls}/${job.quota ?? "旧任务未记录"} 次 · 剩余 ${job.remaining ?? "未知"} 次 · 成功 ${job.successful_calls ?? "未知"} / 失败 ${job.failed_calls ?? "未知"} · 时间上限 ${job.timeout} 秒`));
    if(job.state==='running') {const button=el('button','停止任务');button.onclick=async()=>{try{await bridge.apiPost('stop',{job_id:job.id});await refresh();}catch(e){document.getElementById('notice').textContent='停止失败，请重试';}};card.append(button);}
-   card.append(el('pre',job.output || job.error || '暂无输出'));
+   if(job.error)card.append(el('p',`${job.error_code || 'FAILED'}：${job.error}`));
+   card.append(el('pre',job.output || '暂无输出'));
+   if(job.data_completeness)card.append(el('p',job.data_completeness));
    for(const file of job.files)card.append(el('p',`${file.name} · ${file.bytes} 字节`));
-   const details=el('details','');details.append(el('summary','审计信息'),el('pre',JSON.stringify({code_sha256:job.code_sha256,operations:job.operations},null,2)));card.append(details);list.append(card);
+   const details=el('details','');details.append(el('summary','审计信息'),el('pre',JSON.stringify({code_sha256:job.code_sha256,operations:job.operations,audit_count:job.audit_count,recent_calls:job.call_audit},null,2)));card.append(details);list.append(card);
   }
   if(!result.jobs.length)list.append(el('p','暂无任务。在对话中提出分析或文件处理需求即可。'));
   document.getElementById('notice').textContent='';

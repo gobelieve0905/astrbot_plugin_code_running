@@ -110,7 +110,7 @@ class Runner:
                     return
                 if self.busy:
                     raise ValueError("Runner busy; retry later")
-                if set(payload) - {"code", "inputs", "tools", "timeout"}:
+                if set(payload) - {"code", "inputs", "tools", "timeout", "quota"}:
                     raise ValueError("Unknown runner option")
                 if (
                     not isinstance(payload.get("code"), str)
@@ -120,6 +120,9 @@ class Runner:
                 seconds = payload.get("timeout", 120)
                 if type(seconds) is not int or not 1 <= seconds <= 600:
                     raise ValueError("Invalid timeout")
+                quota = payload.get("quota", 200)
+                if type(quota) is not int or not 1 <= quota <= 10000:
+                    raise ValueError("Invalid quota")
                 self.busy = acquired = True
                 process = await asyncio.create_subprocess_exec(
                     *command(self.image, name),
@@ -147,18 +150,28 @@ class Runner:
                             raise ValueError("Output limit exceeded")
                         event = json.loads(line)
                         kind = event.get("type")
-                        if kind not in {"api", "output", "file", "done"} or finished:
+                        if kind not in {"api", "output", "file", "checkpoint", "done"} or finished:
                             raise ValueError("Invalid sandbox frame")
                         if kind == "done":
                             finished = True
                             # Finish is acknowledged only after a clean process exit.
                             completion = event
                             continue
-                        await send(writer, event)
                         if kind == "api":
                             calls += 1
-                            if calls > 200:
-                                raise ValueError("API frame quota exceeded")
+                            if calls > quota:
+                                await send(
+                                    process.stdin,
+                                    {
+                                        "ok": False,
+                                        "error_code": "QUOTA_EXHAUSTED",
+                                        "error": "调用额度耗尽，请保存进度",
+                                        "remaining": 0,
+                                    },
+                                )
+                                continue
+                        await send(writer, event)
+                        if kind in {"api", "checkpoint"}:
                             await send(process.stdin, await replies.get())
                     code = await process.wait()
                     if code != 0 or not finished:
@@ -190,7 +203,12 @@ class Runner:
                     {
                         "type": "error",
                         "error": type(exc).__name__,
-                        "message": "执行失败、超时或已停止；资源已回收",
+                        "error_code": "EXECUTION_TIMEOUT"
+                        if isinstance(exc, TimeoutError)
+                        else "RUNNER_FAILED",
+                        "message": "任务运行时间耗尽"
+                        if isinstance(exc, TimeoutError)
+                        else "执行服务失败或连接中断",
                     },
                 )
             except (ConnectionError, RuntimeError):

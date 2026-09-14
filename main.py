@@ -1,6 +1,7 @@
 """AstrBot adapter for independent, isolated Python jobs."""
 
 import asyncio
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -20,7 +21,7 @@ PARAMETERS = {
         "properties": {
             "code": {
                 "type": "string",
-                "description": "完整 Python。用 from controlled_api import call, tools；call(工具名, **参数) 返回完整单页响应。input/ 为输入；output/ 中文件会保存。",
+                "description": "完整 Python。from controlled_api import call, tools, APIError, checkpoint, budget。call 返回完整单页响应，失败抛 APIError（.code/.response）；不要用 if not ok 捕获异常。budget() 返回剩余额度/秒数。checkpoint(文件名, JSON对象) 立即保存并确认。每次 API 响应自动记录在 api-results.jsonl；接近预算时保存游标并结束，新任务用 previous_files 续接，不重放写操作。input/ 是输入，output/ 是最终文件。",
             },
             "api_scopes": {
                 "type": "object",
@@ -49,7 +50,7 @@ PARAMETERS = {
                 },
             },
             "timeout": {"type": "integer", "minimum": 1, "maximum": 600, "default": 120},
-            "quota": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+            "quota": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 50},
         },
         "required": ["code"],
         "additionalProperties": False,
@@ -97,7 +98,14 @@ def identity(context):
 
 class CodeTool(FunctionTool):
     def __init__(self, plugin, name):
-        super().__init__(name=name, description=DESCRIPTIONS[name], parameters=PARAMETERS[name])
+        params = copy.deepcopy(PARAMETERS[name])
+        if name == "code_start":
+            params["properties"]["quota"]["maximum"] = plugin.jobs.max_calls
+            params["properties"]["quota"]["default"] = min(50, plugin.jobs.max_calls)
+            params["properties"]["quota"]["description"] = (
+                "受代码插件和 API 插件管理员上限共同约束；重载后生效。失败尝试也消耗额度。"
+            )
+        super().__init__(name=name, description=DESCRIPTIONS[name], parameters=params)
         self.plugin = plugin
 
     async def call(self, context, **kwargs):
@@ -147,7 +155,7 @@ class CodeTool(FunctionTool):
                     kwargs.get("api_scopes", {}),
                     inputs,
                     kwargs.get("timeout", 120),
-                    kwargs.get("quota", 50),
+                    kwargs.get("quota", min(50, jobs.max_calls)),
                 )
             elif self.name == "code_status":
                 record = jobs.get(kwargs["job_id"], owner)
@@ -182,6 +190,7 @@ class CodeRunningPlugin(Star):
             root / "jobs",
             str(root / "runner.sock"),
             str(root.parent / "astrbot_plugin_api_import" / "task-gateway.sock"),
+            max_calls=config.get("max_calls", 200),
         )
         self.web_handlers = [self.page_jobs, self.page_stop]
         context.register_web_api(
@@ -200,7 +209,12 @@ class CodeRunningPlugin(Star):
 
     async def page_jobs(self):
         self.jobs.prune()
-        return json_response({"jobs": [self.jobs.view(r) for r in self.jobs.records.values()]})
+        return json_response(
+            {
+                "max_calls": self.jobs.max_calls,
+                "jobs": [self.jobs.view(r) for r in self.jobs.records.values()],
+            }
+        )
 
     async def page_stop(self):
         try:

@@ -1,1 +1,13 @@
-{"enabled":{"description":"启用代码执行工具（关闭后请重载插件，正在运行的任务会停止）","type":"bool","default":true}}
+{
+  "enabled": {
+    "description": "启用代码执行工具（关闭后请重载插件，正在运行的任务会停止）",
+    "type": "bool",
+    "default": true
+  },
+  "max_calls": {
+    "type": "int",
+    "description": "单任务 API 调用上限（1–10000）",
+    "hint": "默认 200，同时受 API 插件后台额度上限约束。不会改变操作权限。重载后生效。",
+    "default": 200
+  }
+}

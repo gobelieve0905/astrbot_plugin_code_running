@@ -38,3 +38,22 @@ API 批量处理使用 `from controlled_api import call, tools`。`tools` 只包
 生产部署须确认 AstrBot `computer_use_runtime=none`，停用可读宿主文件、任意联网、执行终端的其他插件/MCP，保留 API 插件为业务请求唯一入口。后台配置变动后须重新检查该边界，不能仅凭本插件隔离推断其他工具也安全。当前部署验收不发送消息、不查询业务 API。
 
 执行服务默认只提供镜像预装的依赖，任务不能联网安装依赖。部署固定镜像与构建清单见 [执行服务部署说明](https://github.com/gobelieve0905/astrbot_plugin_code_running/blob/develop/docs/deployment.md)。开发测试和服务运维资料不进入插件市场安装 ZIP。
+
+
+### 任务预算与续接
+
+后台配置 `max_calls` 设置每任务最大调用数（1–10000，默认 200，重载生效），API 插件的 `task_max_calls` 同时限制授权。提高数量不会开放任何 API 操作；600 秒时间上限保持不变。
+
+`controlled_api.call` 返回完整单页，失败抛 `APIError`，可检查 `.code` 和 `.response`。`budget()` 返回剩余调用数和秒数。没有自动分页或重试，尤其不能自动重放写操作。
+
+每次受控调用完成后，结果先存入 `api-results.jsonl` 再交给代码；日志最多 7 MiB，超限明确失败，远端请求可能已成功。完整审计在 `api-audit.json`，业务数据不进入审计参数，游标/查询采用哈希。敏感 API 凭据由网关脱敏。任务输出与检查点有总大小限制。
+
+```python
+from controlled_api import checkpoint, budget
+checkpoint("progress.json", {"next_account": 12, "after": "保存当前游标"})
+print(budget())
+```
+
+检查点确认写入后才返回；避免与 `output/` 的最终文件重名。任务失败、超时或停止后，已保存结果和检查点仍在，可在 `code_start.previous_files` 中选取同一会话用户的文件，作为新任务 `input/` 输入。新任务必须重新声明 `api_scopes` 并通过当前后台权限检查；没有自动恢复程序栈、自动提额或自动重试。任务与文件保留策略仍为 24 小时、最多 50 个任务。
+
+任务成功只表示代码执行完成。业务覆盖情况需核对审计、检查点与预期账户/分页清单；不自动保证查全。
