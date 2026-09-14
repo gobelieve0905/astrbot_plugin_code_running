@@ -1,0 +1,7 @@
+name: astrbot_plugin_code_running
+display_name: Python 代码执行
+desc: 独立隔离 Python 执行、受控 API 网关、长任务、文件结果、审计与停止。
+version: 0.1.0
+author: gobelieve
+repo: https://github.com/gobelieve0905/astrbot_plugin_code_running
+astrbot_version: '>=4.28.0,<5'
