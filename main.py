@@ -226,10 +226,13 @@ class CodeRunningPlugin(Star):
     async def provide_batch_guidance(self, event: AstrMessageEvent, req: ProviderRequest):
         if self.closed or not self.config.get("enabled", True) or not req.func_tool:
             return
-        # Inspect the already filtered request; never add tools or widen persona access.
-        available = {id(tool) for tool in req.func_tool if tool.active}
+        # Inspect public identity metadata: AstrBot may wrap tools with permission guards.
+        # Never unwrap, replace, or add tools to the already filtered request.
+        available = {(tool.name, tool.handler_module_path) for tool in req.func_tool if tool.active}
         required = [t for t in self.tools if t.name in {"code_start", "code_guide"}]
-        if len(required) != 2 or not all(t.active and id(t) in available for t in required):
+        if len(required) != 2 or not all(
+            t.active and (t.name, t.handler_module_path) in available for t in required
+        ):
             return
         prompt = req.system_prompt or ""
         if ROUTING not in prompt:
