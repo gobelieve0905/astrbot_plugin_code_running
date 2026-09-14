@@ -13,6 +13,7 @@ from astrbot.api.web import error_response, json_response, request
 from astrbot.core.agent.tool import FunctionTool
 from mcp.types import CallToolResult, TextContent
 
+from .guide import SECTIONS, read_guide
 from .jobs import Jobs, filename
 
 PARAMETERS = {
@@ -74,6 +75,11 @@ PARAMETERS = {
         "additionalProperties": False,
     },
 }
+PARAMETERS["code_guide"] = {
+    "type": "object",
+    "properties": {"section": {"type": "string", "enum": list(SECTIONS), "default": "overview"}},
+    "additionalProperties": False,
+}
 PARAMETERS["code_status"]["properties"]["wait_seconds"] = {
     "type": "integer",
     "minimum": 0,
@@ -83,7 +89,8 @@ PARAMETERS["code_status"]["properties"]["wait_seconds"] = {
 }
 
 DESCRIPTIONS = {
-    "code_start": "启动隔离 Python 长任务，立即返回任务 ID。无外网/宿主文件访问；API 只能通过 controlled_api.call 使用 api_scopes 内操作，每次分页/重试重新检查后台权限。不要自动重试写操作。可独立处理文件与计算，失败后修正代码创建新任务；用 code_status 获取进度，完成后用 code_file 发送结果文件。",
+    "code_guide": "读取随插件发布的通用批量任务 Skill。复杂批量任务先读 overview，编码前读 batch，断点续接读 resume，汇总交付前读 analysis。固定只读章节，不执行代码、不读取任意文件、不调用 API。",
+    "code_start": "多账户、多页或跨来源批量任务先用 code_guide 读取执行规范。启动隔离 Python 长任务，立即返回任务 ID。无外网/宿主文件访问；API 只能通过 controlled_api.call 使用 api_scopes 内操作，每次分页/重试重新检查后台权限。不要自动重试写操作。可独立处理文件与计算，失败后修正代码创建新任务；用 code_status 获取进度，完成后用 code_file 发送结果文件。",
     "code_status": "查询当前会话用户的 Python 任务状态、输出、错误及结果文件；仍在运行时稍后再查询。",
     "code_stop": "停止当前会话用户的 Python 任务并撤销任务通道，远端已发出的写请求可能已经执行。",
     "code_file": "把当前会话用户任务生成的指定文件发送到当前会话。只接受 code_status 列出的文件名。",
@@ -163,6 +170,9 @@ class CodeTool(FunctionTool):
                 if pending and kwargs.get("wait_seconds", 10):
                     await asyncio.wait([pending], timeout=kwargs.get("wait_seconds", 10))
                 result = jobs.view(record)
+            elif self.name == "code_guide":
+                result = read_guide(kwargs.get("section", "overview"))
+                result["limits"] = {"code_max_calls": jobs.max_calls, "max_seconds": 600}
             elif self.name == "code_stop":
                 result = await jobs.stop(kwargs["job_id"], owner)
             else:
