@@ -1,4 +1,5 @@
-const bridge = window.AstrBotPluginPage;
+function initialize() {
+ const bridge = window.AstrBotPluginPage;
 const states = {running:'运行中', succeeded:'已完成',failed:'失败',stopped:'已停止',interrupted:'重载中断'};
 const el = (tag, text) => {const node=document.createElement(tag);node.textContent=text;return node;};
 async function refresh() {
@@ -18,4 +19,20 @@ async function refresh() {
  }catch(e){document.getElementById('notice').textContent='读取失败，请刷新重试';}
 }
 document.getElementById('refresh').onclick=refresh;
-(async()=>{await bridge.ready();await refresh();})();
+(async()=>{
+ try {
+  await bridge.ready();
+  await refresh();
+ } catch (error) {
+  document.getElementById('notice').textContent='页面初始化失败，请重新打开插件页面';
+ }
+})();
+
+}
+// AstrBot appends its bridge SDK after the page scripts. Resolve it only once
+// parsing (including the injected SDK) has finished, never at script evaluation.
+if (document.readyState === 'loading') {
+ document.addEventListener('DOMContentLoaded', initialize, {once:true});
+} else {
+ initialize();
+}
